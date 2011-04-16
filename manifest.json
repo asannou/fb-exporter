@@ -12,16 +12,16 @@
   "content_scripts": [ {
     "js": [ "/js/lib/jquery-1.5.2.min.js", "/js/content_script.js" ],
     "matches": [ 
-      "http://*.facebook.com/*",
-      "https://*.facebook.com/*"
+      "http://*.facebook.com/*"
     ],
     "run_at": "document_end"
   } ],
   "permissions": [ 
-      "unlimitedStorage",
       "tabs", 
       "https://m.facebook.com/*",
       "http://m.facebook.com/*",
+      "https://api.facebook.com/*",
+      "http://api.facebook.com/*",
       "http://www.google.com/m8/feeds/*", 
       "https://www.google.com/accounts/OAuthAuthorizeToken", 
       "https://www.google.com/accounts/OAuthGetAccessToken" 

@@ -3,9 +3,6 @@
 
 <script type="text/javascript" src="/js/settings.js"></script>
 
-<!-- Web SQL Database to store friends.. -->
-<script type="text/javascript" src="/js/database.js"></script>
-
 <!-- For OAuth google authentication. -->
 <script type="text/javascript" src="/js/lib/chrome_ex_oauthsimple.js"></script>
 <script type="text/javascript" src="/js/lib/chrome_ex_oauth.js"></script>
@@ -13,23 +10,14 @@
 <!-- For importing to contacts. -->
 <script type="text/javascript" src="/js/gmail_exporter.js"></script>
 <script type="text/javascript" src="/js/csv_exporter.js"></script>
-<script type="text/javascript" src="/js/grabber.js"></script>
 
 <!-- Add additional export/import methods here. -->
 <script type="text/javascript" src="/js/lib/jquery-1.5.2.min.js"></script>
 <script type="text/javascript">
 
-var db = new FriendDB();
-var grabber = new ProfileGrabber();
-
 var facebook_id = -1;
 var worker_id = -1;
 var error_occured = false;
-var friendsMap = {};    
-var cachedMap = {};
-
-// Start it globally.
-db.open();
 
 // Synchronously retrieve the current extension version.
 var version = 'NaN';
@@ -42,13 +30,6 @@ var prevVersion = settings.version;
 
 // Check if the extension has been just updated or installed.
 if (currVersion != prevVersion) {
-  if (typeof prevVersion == 'undefined') {
-    // onInstall: Create the database tables.
-    db.createTable();
-  }
-  else {
-    // onUpdate: Do nothing now. 
-  }  
   settings.version = currVersion;
 }
 
@@ -71,14 +52,6 @@ function openSingletonPage(url) {
   });
 }
 
-function putFriendCache(friend) {
-  cachedMap[friend.id] = friend;
-}
-
-function clearCache() {
-  cachedMap = {};
-}
-
 /**
  * Callback when friend finished exporting.
  */
@@ -91,58 +64,58 @@ function onFriendFinishExport(status) {
   });
 }
 
-/**
- * Callback when friend finished relayed.
- */
-function onFriendRelay(friend) {
-  var payload = { gotInfoForFriend: friend };
-  chrome.tabs.sendRequest(worker_id, payload, function (response) {
-    if (!response.OK) {
-      error_occured = true;
-      chrome.tabs.sendRequest(worker_id, { facebookError: 1 });
-    }
-    else {
-      db.persistFriend(friend, function (response) {
-        //console.debug('persisted!');
-      });
-    }
-  });
+function parseBirthday(birthday) {
+  if (!birthday) {
+    return birthday;
+  }
+  var splited = birthday.split('/');
+  if (splited.length == 3) {
+    return [splited[2], splited[0], splited[1]].join('-');
+  } else if (splited.length == 2) {
+    return ['-', splited[0], splited[1]].join('-');
+  }
 }
 
-function startExportFriendData() {
+function parseContactEmail(contactEmail) {
+  return contactEmail ? [contactEmail] : [];
+}
+
+function parseWebsite(website) {
+  return website ? website.split(/\r?\n/) : [];
+}
+
+function onSuccessFQL(data) {
+  var friendsMap = {};
   var i = 0;
-  // Iterate through each friend by key[value]. 
-  $.each(friendsMap, function(key, value) {
-    // If the item is cached, no need to refetch it, just relay the information.
-    if (cachedMap[key]) {
-      console.log('Cache received, no need to grab it again.');
-      onFriendRelay(cachedMap[key]);
-    }
-    else {
-      // Figure out the proper info page, this makes sure to support both
-      // profile name pages with (unique names) or just profile id pages
-      // (numbers). As well, append the ID so we can uniquely identify each page
-      // request with their ID being fetched..
-      var href = 'http://m.facebook.com' + value.path;
-      href.match('\\?') ? href += '&' : href += '?';
-      href += 'v=info';
-
-      // Delay load each friend.
-      var delay = i * 11000 + Math.random() * 1000;
-      setTimeout(function() {
-        var friend = { id: key, name: value.text, photo: value.photo };
-        chrome.tabs.sendRequest(worker_id, {
-            friendExtractionStarted: key, 
-            name: friend.name
-        });
-        grabber.extractInfo(friend, href, function(f) {
-          onFriendRelay(f);
-        });
-      }, delay);
-
-      i++;
-    }
+  $.each(data, function(index, value) {
+    var friend = {
+      id: value.uid,
+      name: value.name,
+      photo: value.pic_square,
+      fb: value.profile_url,
+      phone: {
+        mobile: value.cell,
+        other: value.other_phone
+      },
+      address: (value.current_location || {}).name,
+      birthday: parseBirthday(value.birthday_date),
+      im: {},
+      email: parseContactEmail(value.contact_email),
+      websites: parseWebsite(value.website)
+    };
+    friendsMap[friend.id] = friend;
+    i++;
   });
+  chrome.tabs.sendRequest(worker_id, { renderFriendsList: friendsMap, count: i })
+}
+
+function requestFQL(accessToken) {
+  $.get('https://api.facebook.com/method/fql.query', {
+    query: 'SELECT uid, name, pic_square, profile_url, cell, other_phone, current_location, birthday_date, contact_email, website ' +
+           'FROM user WHERE (uid IN (SELECT uid2 FROM friend WHERE uid1 = me()))',
+    format: 'JSON',
+    access_token: accessToken
+  }, onSuccessFQL);
 }
 
 // Extension request listener.
@@ -160,8 +133,8 @@ chrome.extension.onRequest.addListener(function(request, sender, sendResponse) {
     csv.process(onFriendFinishExport);
     chrome.tabs.sendRequest(worker_id, { csvExportFinished: csv.getDump() });
   }
-  else if (request.friendsListReceived) {
-    friendsMap = request.friendsListReceived;
+  else if (request.accessTokenReceived) {
+    requestFQL(request.accessTokenReceived);
   }
 });
 </script>
